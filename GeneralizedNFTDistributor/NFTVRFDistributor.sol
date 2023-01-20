@@ -140,7 +140,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
         }     
 
         if (claimRounds[nftAddress].length > 0) {
-          currentRound++;
+          currentRounds[nftAddress]++;
         }
         claimRounds[nftAddress].push();
         ClaimRound storage round = claimRounds[nftAddress][currentRound];
