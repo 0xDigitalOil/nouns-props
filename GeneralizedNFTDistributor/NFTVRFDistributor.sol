@@ -84,10 +84,12 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
     mapping (uint256 => address) requestIdToNFT; 
     mapping (uint256 => uint256) requestIdToPropId;
-    mapping (uint256 => DistributionRule) requestIdToDynamic;  
+    mapping (uint256 => DistributionRule) requestIdToDynamic; 
+     
     /* mitigate prop voting metadata replay attack
        where a prop is submitted that refers to an
-       older prop
+       older executed prop with the same signature
+       and calldata.
     */
     mapping (uint256 => bool) servedProp; 
 
@@ -219,10 +221,12 @@ contract NFTVRFDistributor is VRFv2Consumer {
           return uint8((forVotes) / nounSupply * maxWinners);
         }        
         else if (distributionRule == DistributionRule.VotesForMinusAgainst) {
+          // for - against will always be positive
           return uint8((forVotes - againstVotes) / (forVotes + againstVotes + abstainVotes) * maxWinners);
         }        
         else if (distributionRule == DistributionRule.VotesForMinusAgainstPerNoun) {
-          return uint8((forVotes - againstVotes) / nounSupply * maxWinners);
+          // for - against will always be positive
+          return uint8((forVotes - againstVotes) / nounSupply * maxWinners); 
         }        
         return 0;
     }  
