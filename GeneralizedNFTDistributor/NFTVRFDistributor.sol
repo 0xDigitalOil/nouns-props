@@ -36,18 +36,17 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
     /**
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-      CONSTANTS
+      CONSTANTS & IMMUTABLE
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
     **/
 
     ERC721Like public constant NOUNS_TOKEN =
-        ERC721Like(0xb32856f572F3DD96C35D52F1C766CAE252C8263e);       
-
-    INFTBatchTransfer public constant NFT_BATCH_TRANSFER =
-        INFTBatchTransfer(0x298B2cc9f887FE1578250855Cf4cB3c57c84258f);
+        ERC721Like(0x312a72C4Fc5E4Ea9D9ae0d21739130B9CF2758aC);       
 
     INounsDAOProxy public constant NOUNS_DAO_PROXY = 
-        INounsDAOProxy(0x763bAd52729fAB084c82D318c865bEB0D1621056);
+        INounsDAOProxy(0x7A1BF7E1f799151Fb60eCdb9290e907c73e6F67C);
+
+    INFTBatchTransfer public immutable NFT_BATCH_TRANSFER;       
     
 
     uint256 public constant CLAIM_WINDOW = 108_000; // 15 days in blocks
@@ -74,8 +73,9 @@ contract NFTVRFDistributor is VRFv2Consumer {
     mapping (address => uint8) public currentRounds;
 
     mapping (uint256 => address) requestIdToNFT;
-    mapping (uint256 => uint24) requestIdToPropId;
-    mapping (uint256 => bool) requestIdToDynamic;    
+    mapping (uint256 => uint256) requestIdToPropId;
+    mapping (uint256 => bool) requestIdToDynamic;  
+    mapping (uint256 => bool) servedProp;  
 
     /**
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -93,6 +93,8 @@ contract NFTVRFDistributor is VRFv2Consumer {
     error AlreadyClaimed();    
     error RoundIsTooBig(); // maximum round size is 256 NFTs
     error MustHaveAtLeastOneWinner();
+    error PropIdMismatch();
+    error CantReplayProp();
 
     /**
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -100,7 +102,9 @@ contract NFTVRFDistributor is VRFv2Consumer {
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
     **/
 
-    constructor(uint64 subscriptionId) VRFv2Consumer(subscriptionId) {}    
+    constructor(uint64 subscriptionId, INFTBatchTransfer batchTransferAddress) VRFv2Consumer(subscriptionId) {
+      NFT_BATCH_TRANSFER = batchTransferAddress;
+    }    
 
     /**
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -119,7 +123,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
         super.fulfillRandomWords(_requestId, _randomWords);
 
         address nftAddress = requestIdToNFT[_requestId];
-        uint24 propId = requestIdToPropId[_requestId];
+        uint256 propId = requestIdToPropId[_requestId];
         bool isDynamicDistribution = requestIdToDynamic[_requestId];
         uint8 currentRound = currentRounds[nftAddress];
 
@@ -145,12 +149,14 @@ contract NFTVRFDistributor is VRFv2Consumer {
         round.startBlock = uint32(block.number);
         round.endBlock = uint32(block.number + CLAIM_WINDOW);
         uint256 nounSupply = NOUNS_TOKEN.totalSupply();
-        round.nounSupply = uint16(nounSupply);
+        round.nounSupply = uint16(nounSupply);     
         if (isDynamicDistribution) {
           ProposalCondensed memory proposal = NOUNS_DAO_PROXY.proposals(propId);
           round.numberWon = calcNumWinners(nounSupply, proposal.forVotes, proposal.againstVotes, proposal.abstainVotes, availNFTs);
         }
-        round.numberWon = uint8(availNFTs);
+        else {
+          round.numberWon = uint8(availNFTs);   
+        }
         round.randomness = uint152(_randomWords[0]);
 
         emit RoundFulfilled(nftAddress, currentRound, uint8(availNFTs), uint152(_randomWords[0]));
@@ -169,8 +175,50 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
     function calcNumWinners(uint256 nounSupply, uint256 forVotes, uint256 againstVotes, uint256 abstainVotes, uint256 maxWinners) internal pure returns (uint8) {
         // PENDING: implement this        
-        return 1;
+        return uint8((forVotes + againstVotes + abstainVotes) / nounSupply * maxWinners);
     }  
+
+    function findTargetId(address[] memory targets) internal view returns (uint256) {
+        for (uint256 i; i < targets.length; i++) {
+          if (targets[i] == address(this)) {
+            return (i+1);
+          }
+        }
+        return 0;
+    }
+
+    function compareProps(uint256 propId) internal view {
+        (
+          address[] memory targets, 
+          uint256[] memory values,
+          string[] memory signatures,
+          bytes[] memory calldatas
+        ) = NOUNS_DAO_PROXY.getActions(propId);
+
+        if (targets.length == 0) {
+          revert PropIdMismatch();
+        }
+        
+        uint256 targetId = findTargetId(targets);
+        if (targetId == 0) {
+          revert PropIdMismatch();
+        }
+        targetId--;
+
+        if (values[targetId] > 0) {
+          revert PropIdMismatch();
+        }     
+
+        if (keccak256(abi.encodePacked((signatures[targetId]))) != keccak256(abi.encodePacked(("requestRound(address,uint256,bool)")))) {
+          revert PropIdMismatch();
+        }
+
+        if (keccak256(msg.data) != 
+              keccak256(abi.encodePacked(bytes4(keccak256(abi.encodePacked(bytes(signatures[targetId])))), 
+              calldatas[targetId]))) {
+          revert PropIdMismatch();
+        }      
+    }
 
     /**
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -274,17 +322,24 @@ contract NFTVRFDistributor is VRFv2Consumer {
     **/
 
 
-    /// @notice Request randomness for a new glasses distribution round
+    /// @notice Request randomness for a new NFT distribution round
     /// @param nftAddress address of the NFT collection being distributed
     /// @param propId id of the prop that corresponds to this distribution round
     /// @param isDynamicDistribution Informs if the NFTs are to be distributed dynamically according to the number of for votes. Any non-zero value indicates 'yes'
-    function requestRound(address nftAddress, uint24 propId, bool isDynamicDistribution) external onlyOwner returns (uint256 requestId) {
+    function requestRound(address nftAddress, uint256 propId, bool isDynamicDistribution) external onlyOwner returns (uint256 requestId) {
         uint256 availNFTs = remainingAllowance(nftAddress);
         if (availNFTs > 256) {
           revert RoundIsTooBig();
         }
 
-        // Verify prop being executed corresponds to propId
+        // Prevent replay attack
+        if (servedProp[propId]) {
+          revert CantReplayProp();
+        }        
+
+        // Verify prop being executed corresponds to propId in calldata
+        compareProps(propId);
+        servedProp[propId] = true;
 
         requestId = requestRandomWords();
         requestIdToNFT[requestId] = nftAddress;
@@ -293,7 +348,6 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
         emit RoundRequested(requestId, nftAddress);
     }
-
 
     /// @notice Claim NFTs
     /// @param nftAddress address of the NFT being claimed
