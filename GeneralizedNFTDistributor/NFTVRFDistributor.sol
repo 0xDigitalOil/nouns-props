@@ -53,7 +53,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
  
     /**
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-      STRUCTS & STORAGE VARIABLES
+      STRUCTS, ENUMS, STORAGE VARIABLES
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
     **/
 
@@ -68,12 +68,23 @@ contract NFTVRFDistributor is VRFv2Consumer {
         uint256 claimedBitmap;
     } 
 
+    /// @notice Possible states that a proposal may be in
+    enum DistributionRule {
+        Standard,
+        TotalTurnoutPerNoun,
+        TotalTurnoutMinusAbstainPerNoun,
+        VotesFor,
+        VotesForPerNoun,
+        VotesForMinusAgainst,
+        VotesForMinusAgainstPerNoun
+    }    
+
     mapping (address => ClaimRound[]) public claimRounds; // nftAddress -> ClaimRound
     mapping (address => uint8) public currentRounds; // nftAddress -> roundNumber
 
     mapping (uint256 => address) requestIdToNFT; 
     mapping (uint256 => uint256) requestIdToPropId;
-    mapping (uint256 => bool) requestIdToDynamic;  
+    mapping (uint256 => DistributionRule) requestIdToDynamic;  
     /* mitigate prop voting metadata replay attack
        where a prop is submitted that refers to an
        older prop
@@ -127,7 +138,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
         address nftAddress = requestIdToNFT[_requestId];
         uint256 propId = requestIdToPropId[_requestId];
-        bool isDynamicDistribution = requestIdToDynamic[_requestId];
+        DistributionRule distributionRule = requestIdToDynamic[_requestId];
         uint8 currentRound = currentRounds[nftAddress];
 
         if ((claimRounds[nftAddress].length > 0) && (block.number <= claimRounds[nftAddress][currentRound].endBlock)) {
@@ -154,13 +165,13 @@ contract NFTVRFDistributor is VRFv2Consumer {
         round.endBlock = uint32(block.number + CLAIM_WINDOW);
         uint256 nounSupply = NOUNS_TOKEN.totalSupply();
         round.nounSupply = uint16(nounSupply);     
-        if (isDynamicDistribution) {
+        if (distributionRule != DistributionRule.Standard) {
           ProposalState propState = NOUNS_DAO_PROXY.state(propId);
           ProposalCondensed memory proposal = NOUNS_DAO_PROXY.proposals(propId);
-          if (propSate != ProposalState.Executed) {
+          if (propState != ProposalState.Executed) {
             revert PropIdMismatch();
           }
-          round.numberWon = calcNumWinners(nounSupply, proposal.forVotes, proposal.againstVotes, proposal.abstainVotes, availNFTs);
+          round.numberWon = calcNumWinners(distributionRule, nounSupply, proposal.forVotes, proposal.againstVotes, proposal.abstainVotes, availNFTs);
         }
         else {
           round.numberWon = uint8(availNFTs);   
@@ -188,14 +199,32 @@ contract NFTVRFDistributor is VRFv2Consumer {
     }  
 
     /// @notice Calculates number of NFT winners for the round based on voter turnout
+    /// @param distributionRule rule with which to distribute (see DistributionRule)    
     /// @param nounSupply address of the NFT collection being claimed
     /// @param forVotes number of for votes the prop got
     /// @param againstVotes number of against votes the prop got    
     /// @param abstainVotes number of abstain votes the prop got    
     /// @param maxWinners max number of NFTs to be distributed
-    function calcNumWinners(uint256 nounSupply, uint256 forVotes, uint256 againstVotes, uint256 abstainVotes, uint256 maxWinners) internal pure returns (uint8) {
-        // PENDING: implement this        
-        return uint8((forVotes + againstVotes + abstainVotes) / nounSupply * maxWinners);
+    function calcNumWinners(DistributionRule distributionRule, uint256 nounSupply, uint256 forVotes, uint256 againstVotes, uint256 abstainVotes, uint256 maxWinners) internal pure returns (uint8) {
+        if (distributionRule == DistributionRule.TotalTurnoutPerNoun) {
+          return uint8((forVotes + againstVotes + abstainVotes) / nounSupply * maxWinners);
+        }
+        else if (distributionRule == DistributionRule.TotalTurnoutMinusAbstainPerNoun) {
+          return uint8((forVotes + againstVotes) / nounSupply * maxWinners);
+        }
+        else if (distributionRule == DistributionRule.VotesFor) {
+          return uint8((forVotes) / (forVotes + againstVotes + abstainVotes) * maxWinners);
+        }
+        else if (distributionRule == DistributionRule.VotesForPerNoun) {
+          return uint8((forVotes) / nounSupply * maxWinners);
+        }        
+        else if (distributionRule == DistributionRule.VotesForMinusAgainst) {
+          return uint8((forVotes - againstVotes) / (forVotes + againstVotes + abstainVotes) * maxWinners);
+        }        
+        else if (distributionRule == DistributionRule.VotesForMinusAgainstPerNoun) {
+          return uint8((forVotes - againstVotes) / nounSupply * maxWinners);
+        }        
+        return 0;
     }  
 
     /// @notice Returns id of first reference to this contract address in the list of prop targets. Assumes that prop will only call this contract once.
@@ -233,7 +262,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
           revert PropIdMismatch();
         }     
 
-        if (keccak256(abi.encodePacked((signatures[targetId]))) != keccak256(abi.encodePacked(("requestRound(address,uint256,bool)")))) {
+        if (keccak256(abi.encodePacked((signatures[targetId]))) != keccak256(abi.encodePacked(("requestRound(address,uint256,uint8)")))) {
           revert PropIdMismatch();
         }
 
@@ -354,8 +383,8 @@ contract NFTVRFDistributor is VRFv2Consumer {
     /// @notice Request randomness for a new NFT distribution round
     /// @param nftAddress address of the NFT collection being distributed
     /// @param propId id of the prop that corresponds to this distribution round
-    /// @param isDynamicDistribution Informs if the NFTs are to be distributed dynamically according to the number of for votes. Any non-zero value indicates 'yes'
-    function requestRound(address nftAddress, uint256 propId, bool isDynamicDistribution) external onlyOwner returns (uint256 requestId) {
+    /// @param distributionRule Informs if the NFTs are to be distributed dynamically and according to what rule (see DistributionRule)
+    function requestRound(address nftAddress, uint256 propId, DistributionRule distributionRule) external onlyOwner returns (uint256 requestId) {
         uint256 availNFTs = remainingAllowance(nftAddress);
         if (availNFTs > 256) {
           revert RoundIsTooBig();
@@ -373,7 +402,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
         requestId = requestRandomWords();
         requestIdToNFT[requestId] = nftAddress;
         requestIdToPropId[requestId] = propId;
-        requestIdToDynamic[requestId] = isDynamicDistribution;
+        requestIdToDynamic[requestId] = distributionRule;
 
         emit RoundRequested(requestId, nftAddress);
     }
