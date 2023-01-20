@@ -85,7 +85,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
     mapping (uint256 => address) requestIdToNFT; 
     mapping (uint256 => uint256) requestIdToPropId;
     mapping (uint256 => DistributionRule) requestIdToDynamic; 
-     
+
     /* mitigate prop voting metadata replay attack
        where a prop is submitted that refers to an
        older executed prop with the same signature
@@ -232,7 +232,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
     }  
 
     /// @notice Returns id of first reference to this contract address in the list of prop targets. Assumes that prop will only call this contract once.
-    /// @param targets list of addresses that prop is targeting
+    /// @param targets list of contract addresses that prop is calling
     function findTargetId(address[] memory targets) internal view returns (uint256) {
         for (uint256 i; i < targets.length; i++) {
           if (targets[i] == address(this)) {
