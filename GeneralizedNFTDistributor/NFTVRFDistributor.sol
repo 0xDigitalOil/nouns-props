@@ -68,13 +68,17 @@ contract NFTVRFDistributor is VRFv2Consumer {
         uint256 claimedBitmap;
     } 
 
-    mapping (address => ClaimRound[]) public claimRounds;
-    mapping (address => uint8) public currentRounds;
+    mapping (address => ClaimRound[]) public claimRounds; // nftAddress -> ClaimRound
+    mapping (address => uint8) public currentRounds; // nftAddress -> roundNumber
 
-    mapping (uint256 => address) requestIdToNFT;
+    mapping (uint256 => address) requestIdToNFT; 
     mapping (uint256 => uint256) requestIdToPropId;
     mapping (uint256 => bool) requestIdToDynamic;  
-    mapping (uint256 => bool) servedProp;  
+    /* mitigate prop voting metadata replay attack
+       where a prop is submitted that refers to an
+       older prop
+    */
+    mapping (uint256 => bool) servedProp; 
 
     /**
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -151,7 +155,11 @@ contract NFTVRFDistributor is VRFv2Consumer {
         uint256 nounSupply = NOUNS_TOKEN.totalSupply();
         round.nounSupply = uint16(nounSupply);     
         if (isDynamicDistribution) {
+          ProposalState propState = NOUNS_DAO_PROXY.state(propId);
           ProposalCondensed memory proposal = NOUNS_DAO_PROXY.proposals(propId);
+          if (propSate != ProposalState.Executed) {
+            revert PropIdMismatch();
+          }
           round.numberWon = calcNumWinners(nounSupply, proposal.forVotes, proposal.againstVotes, proposal.abstainVotes, availNFTs);
         }
         else {
