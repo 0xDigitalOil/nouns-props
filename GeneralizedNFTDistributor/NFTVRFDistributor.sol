@@ -48,7 +48,6 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
     INFTBatchTransfer public immutable NFT_BATCH_TRANSFER;       
     
-
     uint256 public constant CLAIM_WINDOW = 108_000; // 15 days in blocks
 
  
@@ -163,21 +162,35 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
     }
 
+    /// @notice Checks if NFT is already claimed in the bitmap
+    /// @param nftAddress address of the NFT collection being claimed
+    /// @param index bitmap index of the NFT being claimed
     function _isClaimed(address nftAddress, uint8 index) internal view returns (bool) {
         uint8 currentRound = currentRounds[nftAddress];
         return claimRounds[nftAddress][currentRound].claimedBitmap & 1 << index != 0;
     }
 
+    /// @notice Sets an NFT as already claimed in the bitmap
+    /// @param nftAddress address of the NFT collection being claimed
+    /// @param index bitmap index of the NFT being claimed
     function _setClaimed(address nftAddress, uint8 index) internal {
         uint8 currentRound = currentRounds[nftAddress];
         claimRounds[nftAddress][currentRound].claimedBitmap |= 1 << index;
     }  
 
+    /// @notice Calculates number of NFT winners for the round based on voter turnout
+    /// @param nounSupply address of the NFT collection being claimed
+    /// @param forVotes number of for votes the prop got
+    /// @param againstVotes number of against votes the prop got    
+    /// @param abstainVotes number of abstain votes the prop got    
+    /// @param maxWinners max number of NFTs to be distributed
     function calcNumWinners(uint256 nounSupply, uint256 forVotes, uint256 againstVotes, uint256 abstainVotes, uint256 maxWinners) internal pure returns (uint8) {
         // PENDING: implement this        
         return uint8((forVotes + againstVotes + abstainVotes) / nounSupply * maxWinners);
     }  
 
+    /// @notice Returns id of first reference to this contract address in the list of prop targets. Assumes that prop will only call this contract once.
+    /// @param targets list of addresses that prop is targeting
     function findTargetId(address[] memory targets) internal view returns (uint256) {
         for (uint256 i; i < targets.length; i++) {
           if (targets[i] == address(this)) {
@@ -187,6 +200,8 @@ contract NFTVRFDistributor is VRFv2Consumer {
         return 0;
     }
 
+    /// @notice Compares prop action parameters against self-referencing call to the contract when the prop is executing
+    /// @param propId id of the prop passed in the calldata when the prop was built
     function compareProps(uint256 propId) internal view {
         (
           address[] memory targets, 
@@ -239,6 +254,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
     }
 
     /// @notice Get remaining claimable number of NFTs this round. First check if this contract's allowance was taken away and in this case, return 0.
+    /// @param nftAddress address of NFT collection    
     function remainingClaimableCurrentRound(address nftAddress) external view returns (uint256) { 
       uint8 currentRound = currentRounds[nftAddress];
       if (remainingAllowance(nftAddress) == 0) {
@@ -253,6 +269,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
     }
 
     /// @notice Expired NFTs that were not claimed in the last expired round. 
+    /// @param nftAddress address of NFT collection    
     function expiredNFTsLastRound(address nftAddress) public view returns (uint256) { 
       uint8 currentRound = currentRounds[nftAddress];    
       if ((claimRounds[nftAddress].length > 0) && block.number > claimRounds[nftAddress][currentRound].endBlock) {
@@ -267,6 +284,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
     }   
 
     /// @notice Returns number of NFTs that should be allocated for new round taking into account current allowance and number of NFTs desired to distributed in new round. If there is a round currently open, will return 0.
+    /// @param nftAddress address of NFT collection    
     /// @param numberToDistribute the number of NFTs looking to distribute
     function additionalAllowanceRequiredFor(address nftAddress, uint256 numberToDistribute) external view returns (uint256) { 
       uint8 currentRound = currentRounds[nftAddress];       
@@ -279,6 +297,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
     }
 
     /// @notice Returns number of NFTs that are claimable by an address
+    /// @param nftAddress address of NFT collection    
     /// @param receiver address that would claim NFTs
     function claimableNFTs(address nftAddress, address receiver) external view returns (uint256 numNFTs) {    
       uint8 currentRound = currentRounds[nftAddress];
@@ -305,6 +324,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
     }      
 
     /// @notice Returns remaining number of blocks until current claim period expires
+    /// @param nftAddress address of NFT collection    
     function blocksUntilClaimExpires(address nftAddress) external view returns (uint256) 
     {        
       uint8 currentRound = currentRounds[nftAddress];
@@ -431,5 +451,4 @@ contract NFTVRFDistributor is VRFv2Consumer {
         NFT_BATCH_TRANSFER.sendManyNFTs(ERC721Like(nftAddress), startId, recipients);
     }
 
-   
 }
