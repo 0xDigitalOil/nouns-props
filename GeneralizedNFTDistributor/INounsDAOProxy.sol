@@ -1,6 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.7;
 
+/// @notice Possible states that a proposal may be in
+enum ProposalState {
+    Pending,
+    Active,
+    Canceled,
+    Defeated,
+    Succeeded,
+    Queued,
+    Expired,
+    Executed,
+    Vetoed
+}
+
 struct ProposalCondensed {
         /// @notice Unique id for looking up a proposal
         uint256 id;
@@ -34,9 +47,20 @@ struct ProposalCondensed {
         uint256 creationBlock;
 }
 
-/// @dev Interface for ERC721Like
 interface INounsDAOProxy {
 
         function proposals(uint256 proposalId) external view returns (ProposalCondensed memory);
+
+        function getActions(uint256 proposalId)
+            external
+            view
+            returns (
+                address[] memory targets,
+                uint256[] memory values,
+                string[] memory signatures,
+                bytes[] memory calldatas
+            );
+
+        function state(uint256 proposalId) external view returns (ProposalState);
 
 }
