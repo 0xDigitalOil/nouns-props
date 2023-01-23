@@ -24,14 +24,14 @@ contract NFTVRFDistributor is VRFv2Consumer {
     /// @param roundId id of the claimRound
     /// @param numberWon number of NFTs claimable in this round
     /// @param randomness block at which the claim ends    
-    event RoundFulfilled(address nftAddress, uint8 roundId, uint8 numberWon, uint152 randomness);
+    event RoundFulfilled(address nftAddress, uint8 roundId, uint16 numberWon, uint136 randomness);
 
     /// @dev Event log for when a round is requested
     /// @param nftAddress address of the NFT collection being distributed
     /// @param roundId id of the claimRound
     /// @param index claimed NFTs index (in the claim round's context)
     /// @param winner address that claimed the NFTs
-    event NFTClaimed(address nftAddress, uint8 roundId, uint8 index, address winner);    
+    event NFTClaimed(address nftAddress, uint8 roundId, uint16 index, address winner);    
 
 
     /**
@@ -52,23 +52,23 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
  
     /**
-    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
       STRUCTS, ENUMS, STORAGE VARIABLES
-    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
     **/
 
     struct ClaimRound {
         uint8 id;
-        uint8 numberWon;
-        uint8 numberClaimed;
+        uint16 numberWon;
+        uint16 numberClaimed;
         uint16 nounSupply;
         uint32 startBlock;
         uint32 endBlock;
-        uint152 randomness;
-        uint256 claimedBitmap;
+        uint136 randomness;
+        uint256[] claimedBitmap;
     } 
 
-    /// @notice Possible states that a proposal may be in
+    /// @notice Possible methods to calculate how many NFTs to distribute
     enum DistributionRule {
         Standard,
         TotalTurnoutPerNoun,
@@ -77,14 +77,14 @@ contract NFTVRFDistributor is VRFv2Consumer {
         VotesForPerNoun,
         VotesForMinusAgainst,
         VotesForMinusAgainstPerNoun
-    }    
+    }
 
     mapping (address => ClaimRound[]) public claimRounds; // nftAddress -> ClaimRound
     mapping (address => uint8) public currentRounds; // nftAddress -> roundNumber
 
     mapping (uint256 => address) requestIdToNFT; 
     mapping (uint256 => uint256) requestIdToPropId;
-    mapping (uint256 => DistributionRule) requestIdToDynamic; 
+    mapping (uint256 => DistributionRule) requestIdToRule; 
 
     /* mitigate prop voting metadata replay attack
        where a prop is submitted that refers to an
@@ -107,10 +107,11 @@ contract NFTVRFDistributor is VRFv2Consumer {
     error InvalidRound();
     error ClaimPeriodEnded();
     error AlreadyClaimed();    
-    error RoundIsTooBig(); // maximum round size is 256 NFTs
+    error RoundIsTooBig(); // Max round size is 2^16 = 65,536 NFTs. Constrained by claim bitmap array.
     error MustHaveAtLeastOneWinner();
     error PropIdMismatch();
     error CantReplayProp();
+    error TooManyRounds();
 
     /**
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -139,16 +140,19 @@ contract NFTVRFDistributor is VRFv2Consumer {
         super.fulfillRandomWords(_requestId, _randomWords);
 
         address nftAddress = requestIdToNFT[_requestId];
-        uint256 propId = requestIdToPropId[_requestId];
-        DistributionRule distributionRule = requestIdToDynamic[_requestId];
         uint8 currentRound = currentRounds[nftAddress];
+        if (currentRound == 255) {
+          revert TooManyRounds();
+        }        
+        uint256 propId = requestIdToPropId[_requestId];
+        DistributionRule distributionRule = requestIdToRule[_requestId];
 
         if ((claimRounds[nftAddress].length > 0) && (block.number <= claimRounds[nftAddress][currentRound].endBlock)) {
           revert ClaimPeriodNotFinished();
         }        
 
         uint256 availNFTs = remainingAllowance(nftAddress);
-        if (availNFTs > 256) {
+        if (availNFTs > 2**16) {
           revert RoundIsTooBig();
         }
 
@@ -176,28 +180,32 @@ contract NFTVRFDistributor is VRFv2Consumer {
           round.numberWon = calcNumWinners(distributionRule, nounSupply, proposal.forVotes, proposal.againstVotes, proposal.abstainVotes, availNFTs);
         }
         else {
-          round.numberWon = uint8(availNFTs);   
+          round.numberWon = uint16(availNFTs);   
         }
-        round.randomness = uint152(_randomWords[0]);
+        round.randomness = uint136(_randomWords[0]);
 
-        emit RoundFulfilled(nftAddress, currentRound, uint8(availNFTs), uint152(_randomWords[0]));
+        uint8 numberOfBitmaps = uint8((availNFTs - 1) / 256 + 1); // ceiling of availNFTs/256
+        uint256[] memory _bitmaps = new uint256[](numberOfBitmaps);
+        round.claimedBitmap = _bitmaps;
+
+        emit RoundFulfilled(nftAddress, currentRound, round.numberWon, uint136(_randomWords[0]));
 
     }
 
     /// @notice Checks if NFT is already claimed in the bitmap
     /// @param nftAddress address of the NFT collection being claimed
     /// @param index bitmap index of the NFT being claimed
-    function _isClaimed(address nftAddress, uint8 index) internal view returns (bool) {
+    function _isClaimed(address nftAddress, uint16 index) internal view returns (bool) {
         uint8 currentRound = currentRounds[nftAddress];
-        return claimRounds[nftAddress][currentRound].claimedBitmap & 1 << index != 0;
+        return claimRounds[nftAddress][currentRound].claimedBitmap[(index/256)] & 1 << (index % 256) != 0;
     }
 
     /// @notice Sets an NFT as already claimed in the bitmap
     /// @param nftAddress address of the NFT collection being claimed
     /// @param index bitmap index of the NFT being claimed
-    function _setClaimed(address nftAddress, uint8 index) internal {
+    function _setClaimed(address nftAddress, uint16 index) internal {
         uint8 currentRound = currentRounds[nftAddress];
-        claimRounds[nftAddress][currentRound].claimedBitmap |= 1 << index;
+        claimRounds[nftAddress][currentRound].claimedBitmap[(index/256)] |= 1 << (index % 256);
     }  
 
     /// @notice Calculates number of NFT winners for the round based on voter turnout
@@ -207,26 +215,26 @@ contract NFTVRFDistributor is VRFv2Consumer {
     /// @param againstVotes number of against votes the prop got    
     /// @param abstainVotes number of abstain votes the prop got    
     /// @param maxWinners max number of NFTs to be distributed
-    function calcNumWinners(DistributionRule distributionRule, uint256 nounSupply, uint256 forVotes, uint256 againstVotes, uint256 abstainVotes, uint256 maxWinners) internal pure returns (uint8) {
+    function calcNumWinners(DistributionRule distributionRule, uint256 nounSupply, uint256 forVotes, uint256 againstVotes, uint256 abstainVotes, uint256 maxWinners) internal pure returns (uint16) {
         if (distributionRule == DistributionRule.TotalTurnoutPerNoun) {
-          return uint8((forVotes + againstVotes + abstainVotes) / nounSupply * maxWinners);
+          return uint16((forVotes + againstVotes + abstainVotes) / nounSupply * maxWinners);
         }
         else if (distributionRule == DistributionRule.TotalTurnoutMinusAbstainPerNoun) {
-          return uint8((forVotes + againstVotes) / nounSupply * maxWinners);
+          return uint16((forVotes + againstVotes) / nounSupply * maxWinners);
         }
         else if (distributionRule == DistributionRule.VotesFor) {
-          return uint8((forVotes) / (forVotes + againstVotes + abstainVotes) * maxWinners);
+          return uint16((forVotes) / (forVotes + againstVotes + abstainVotes) * maxWinners);
         }
         else if (distributionRule == DistributionRule.VotesForPerNoun) {
-          return uint8((forVotes) / nounSupply * maxWinners);
+          return uint16((forVotes) / nounSupply * maxWinners);
         }        
         else if (distributionRule == DistributionRule.VotesForMinusAgainst) {
           // for - against will always be positive
-          return uint8((forVotes - againstVotes) / (forVotes + againstVotes + abstainVotes) * maxWinners);
+          return uint16((forVotes - againstVotes) / (forVotes + againstVotes + abstainVotes) * maxWinners);
         }        
         else if (distributionRule == DistributionRule.VotesForMinusAgainstPerNoun) {
           // for - against will always be positive
-          return uint8((forVotes - againstVotes) / nounSupply * maxWinners); 
+          return uint16((forVotes - againstVotes) / nounSupply * maxWinners); 
         }        
         return 0;
     }  
@@ -285,7 +293,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
     /// @notice Get number of claimed NFTs per round
     /// @param round round number
-    function numberClaimedNFTs(address nftAddress, uint256 round) external view returns (uint256) {
+    function numberClaimedNFTs(address nftAddress, uint256 round) external view returns (uint16) {
       return (claimRounds[nftAddress].length > 0) ? claimRounds[nftAddress][round].numberClaimed : 0;
     }
 
@@ -297,7 +305,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
     /// @notice Get remaining claimable number of NFTs this round. First check if this contract's allowance was taken away and in this case, return 0.
     /// @param nftAddress address of NFT collection    
-    function remainingClaimableCurrentRound(address nftAddress) external view returns (uint256) { 
+    function remainingClaimableCurrentRound(address nftAddress) external view returns (uint16) { 
       uint8 currentRound = currentRounds[nftAddress];
       if (remainingAllowance(nftAddress) == 0) {
         return 0;
@@ -350,7 +358,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
       ClaimRound memory round = claimRounds[nftAddress][currentRound];
 
-      for (uint8 i = 0; i < round.numberWon; ) {
+      for (uint16 i = 0; i < round.numberWon; ) {
             if (_isClaimed(nftAddress, i)) {
                 continue;
             }
@@ -390,7 +398,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
     /// @param distributionRule Informs if the NFTs are to be distributed dynamically and according to what rule (see DistributionRule)
     function requestRound(address nftAddress, uint256 propId, DistributionRule distributionRule) external onlyOwner returns (uint256 requestId) {
         uint256 availNFTs = remainingAllowance(nftAddress);
-        if (availNFTs > 256) {
+        if (availNFTs > 2**16) {
           revert RoundIsTooBig();
         }
 
@@ -406,7 +414,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
         requestId = requestRandomWords();
         requestIdToNFT[requestId] = nftAddress;
         requestIdToPropId[requestId] = propId;
-        requestIdToDynamic[requestId] = distributionRule;
+        requestIdToRule[requestId] = distributionRule;
 
         emit RoundRequested(requestId, nftAddress);
     }
@@ -415,9 +423,9 @@ contract NFTVRFDistributor is VRFv2Consumer {
     /// @param nftAddress address of the NFT being claimed
     /// @param index The winning index
     /// @param suggStartId Option to save gas by suggesting a starting search point for the NFT startId. Optionally, could be set to zero.
-    function claim(address nftAddress, uint8 index, uint256 suggStartId) external {
+    function claim(address nftAddress, uint16 index, uint256 suggStartId) external {
         uint8 currentRound = currentRounds[nftAddress];
-        ClaimRound memory round = claimRounds[nftAddress][currentRound];
+        ClaimRound storage round = claimRounds[nftAddress][currentRound];
         if (round.randomness == 0) {
             revert InvalidRound();
         }
@@ -433,6 +441,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
         uint256 startId = NFT_BATCH_TRANSFER.getStartId(ERC721Like(nftAddress), suggStartId);
 
+        round.numberClaimed++;
         address owner = NOUNS_TOKEN.ownerOf(
             uint256(keccak256(abi.encode(round.randomness, index))) % round.nounSupply
         );
@@ -451,9 +460,9 @@ contract NFTVRFDistributor is VRFv2Consumer {
     /// @param nftAddress address of the NFT being claimed
     /// @param indexes The winning indexes
     /// @param suggStartId Option to save gas by suggesting a starting search point for the NFT startId. Optionally, could be set to zero.
-    function claimMany(address nftAddress, uint8[] calldata indexes, uint256 suggStartId) external {
+    function claimMany(address nftAddress, uint16[] calldata indexes, uint256 suggStartId) external {
         uint8 currentRound = currentRounds[nftAddress];
-        ClaimRound memory round = claimRounds[nftAddress][currentRound];
+        ClaimRound storage round = claimRounds[nftAddress][currentRound];
         if (round.randomness == 0) {
             revert InvalidRound();
         }
@@ -461,13 +470,13 @@ contract NFTVRFDistributor is VRFv2Consumer {
             revert ClaimPeriodEnded();
         }
 
-        // It is assumed that this contract has a sufficient allowance
         uint256 startId = NFT_BATCH_TRANSFER.getStartId(ERC721Like(nftAddress), suggStartId);
 
         uint256 indexCount = indexes.length;
         address[] memory recipients = new address[](indexCount);
+        round.numberClaimed += uint16(indexCount);
         for (uint256 i = 0; i < indexCount; ) {
-            uint8 index = indexes[i];
+            uint16 index = indexes[i];
             if (index >= round.numberWon) {
                 revert InvalidIndex();
             }
