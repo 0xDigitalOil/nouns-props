@@ -58,17 +58,22 @@ contract NFTVRFDistributor is VRFv2Consumer {
     **/
 
     struct ClaimRound {
-        uint8 id;
-        uint16 numberWon;
+        uint8 id; // round number
+        uint16 numberWon; // number of NFTs to distribute
         uint16 numberClaimed;
         uint16 nounSupply;
         uint32 startBlock;
         uint32 endBlock;
         uint136 randomness;
+        /*
+        First element of array is claimed bitmap 
+        for NFTs 1-256. Second element is for 
+        257-512, and so on. Up to 2^16 NFTs.
+        */
         uint256[] claimedBitmap;
     } 
 
-    /// @notice Possible methods to calculate how many NFTs to distribute
+    /// @notice Possible methods to calculate how many NFTs to distribute based on prop voting results
     enum DistributionRule {
         Standard,
         TotalTurnoutPerNoun,
@@ -82,8 +87,8 @@ contract NFTVRFDistributor is VRFv2Consumer {
     mapping (address => ClaimRound[]) public claimRounds; // nftAddress -> ClaimRound
     mapping (address => uint8) public currentRounds; // nftAddress -> roundNumber
 
-    mapping (uint256 => address) requestIdToNFT; 
-    mapping (uint256 => uint256) requestIdToPropId;
+    mapping (uint256 => address) requestIdToNFT; // maps to NFT collection address
+    mapping (uint256 => uint256) requestIdToPropId; // maps to Nouns prop number
     mapping (uint256 => DistributionRule) requestIdToRule; 
 
     /* mitigate prop voting metadata replay attack
@@ -111,7 +116,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
     error MustHaveAtLeastOneWinner();
     error PropIdMismatch();
     error CantReplayProp();
-    error TooManyRounds();
+    error TooManyRounds(); // Max number of distribution rounds per NFT collection is 256
 
     /**
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -155,7 +160,6 @@ contract NFTVRFDistributor is VRFv2Consumer {
         if (availNFTs > 2**16) {
           revert RoundIsTooBig();
         }
-
         if (availNFTs == 0) {
           revert AvailNFTsZero(); 
         }     
@@ -293,7 +297,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
     /// @notice Get number of claimed NFTs per round
     /// @param round round number
-    function numberClaimedNFTs(address nftAddress, uint256 round) external view returns (uint16) {
+    function numberClaimedNFTs(address nftAddress, uint8 round) external view returns (uint16) {
       return (claimRounds[nftAddress].length > 0) ? claimRounds[nftAddress][round].numberClaimed : 0;
     }
 
@@ -320,7 +324,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
 
     /// @notice Expired NFTs that were not claimed in the last expired round. 
     /// @param nftAddress address of NFT collection    
-    function expiredNFTsLastRound(address nftAddress) public view returns (uint256) { 
+    function expiredNFTsLastRound(address nftAddress) public view returns (uint16) { 
       uint8 currentRound = currentRounds[nftAddress];    
       if ((claimRounds[nftAddress].length > 0) && block.number > claimRounds[nftAddress][currentRound].endBlock) {
         return claimRounds[nftAddress][currentRound].numberWon - claimRounds[nftAddress][currentRound].numberClaimed;
@@ -349,7 +353,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
     /// @notice Returns number of NFTs that are claimable by an address
     /// @param nftAddress address of NFT collection    
     /// @param receiver address that would claim NFTs
-    function claimableNFTs(address nftAddress, address receiver) external view returns (uint256 numNFTs) {    
+    function claimableNFTs(address nftAddress, address receiver) external view returns (uint16 numNFTs) {    
       uint8 currentRound = currentRounds[nftAddress];
       // First check if there is a current claim round open
       if ((claimRounds[nftAddress].length == 0) || (block.number > claimRounds[nftAddress][currentRound].endBlock)) {
@@ -401,6 +405,9 @@ contract NFTVRFDistributor is VRFv2Consumer {
         if (availNFTs > 2**16) {
           revert RoundIsTooBig();
         }
+        if (availNFTs == 0) {
+          revert AvailNFTsZero(); 
+        }          
 
         // Prevent replay attack
         if (servedProp[propId]) {
