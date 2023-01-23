@@ -283,7 +283,7 @@ contract NFTVRFDistributor is VRFv2Consumer {
         }
 
         if (keccak256(msg.data) != 
-              keccak256(abi.encodePacked(bytes4(keccak256(abi.encodePacked(bytes(signatures[targetId])))), 
+              keccak256(abi.encodePacked(bytes4(keccak256(abi.encodePacked(signatures[targetId]))), 
               calldatas[targetId]))) {
           revert PropIdMismatch();
         }      
