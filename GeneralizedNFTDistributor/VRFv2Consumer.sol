@@ -45,7 +45,7 @@ contract VRFv2Consumer is VRFConsumerBaseV2, ConfirmedOwner {
         uint64 subscriptionId
     )
         VRFConsumerBaseV2(0x2Ca8E0C643bDe4C2E08ab1fA0da3401AdAD7734D)
-        ConfirmedOwner(0x04A040BBC188c0A893CCCB913a6A93F643761C70) // Nouns DAO Executor address
+        ConfirmedOwner(0x74C6431E6Ea58398202aAfD5D1F57032dDFFf390) // Nouns DAO Executor address
     {
         COORDINATOR = VRFCoordinatorV2Interface(
             0x2Ca8E0C643bDe4C2E08ab1fA0da3401AdAD7734D

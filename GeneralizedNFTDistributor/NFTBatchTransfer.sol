@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.7;
 
 interface ERC721Like {
     function transferFrom(
@@ -15,6 +15,8 @@ interface ERC721Like {
     function setApprovalForAll(address operator, bool approved) external;
 
     function totalSupply() external view returns (uint256 supply);
+
+    function isApprovedForAll(address nftOwner, address operator) external view returns (bool);    
 }
 
 contract NFTBatchTransfer {
@@ -25,7 +27,7 @@ contract NFTBatchTransfer {
     **/
 
     address public constant NOUNS_DAO =
-        0xBFa0c9B831599405dCFF9aC3232387354Bbd1514;
+        0x74C6431E6Ea58398202aAfD5D1F57032dDFFf390;
 
     /**
     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -91,6 +93,7 @@ contract NFTBatchTransfer {
     /// @dev Will revert:
     /// - NotEnoughOwned() if Nouns DAO has no balance
     /// - NotEnoughAllowance() if receiver has no allowance
+    /// @param NFT the NFT collection address
     /// @param receiver Address to calculate maximum batch amount
     /// @return startId The first token ID owned by Nouns DAO
     /// @return amount The maximum batch amount from the startId for this receiver
@@ -118,6 +121,17 @@ contract NFTBatchTransfer {
                 break;
             }
         }
+    }
+
+    /// @notice Confirm if this contract is approved by Nouns DAO for this NFT
+    /// @param NFT Address to calculate maximum batch amount
+    /// @return approved yes if approved to move NFT collection in Nouns DAO treasury
+    function isApprovedAll(ERC721Like NFT)
+        public
+        view
+        returns (bool approved)
+    {
+        return NFT.isApprovedForAll(NOUNS_DAO, address(this));
     }
 
     /**

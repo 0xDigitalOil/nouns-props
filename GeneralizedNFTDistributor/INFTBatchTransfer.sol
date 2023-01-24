@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.13;
+pragma solidity ^0.8.7;
 
 /// @dev Interface for ERC721Like
 interface ERC721Like {
@@ -16,6 +16,8 @@ interface ERC721Like {
     function setApprovalForAll(address operator, bool approved) external;
     
     function totalSupply() external returns (uint256);
+
+    function isApprovedForAll(address nftOwner, address operator) external view returns (bool);
 
 }
 
@@ -34,4 +36,7 @@ interface INFTBatchTransfer {
 
     function allowanceFor(address nftAddress, address receiver) external view
         returns (uint256);
+
+    function isApprovedAll(ERC721Like NFT) external view
+        returns (bool approved);  
 }
